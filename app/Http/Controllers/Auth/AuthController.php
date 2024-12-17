@@ -1,42 +1,60 @@
 <?php
+
 namespace App\Http\Controllers\Auth;
+
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Session;
 use App\Models\User;
 use Hash;
-use Illuminate\Support\Facades\Http;
-  
+use GuzzleHttp\Client;
 
 class AuthController extends Controller
-
 {
+    private $client;
+
+    public function __construct()
+    {
+        $this->client = new Client([
+            'base_uri' => 'https://api.samsara.com',
+            'headers' => [
+                'Authorization' => 'Bearer ' . env('SAMSARA_API_KEY'),
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ],
+            'verify' => false, // Disable SSL verification (optional, for development purposes)
+        ]);
+    }
+
     public function index()
     {
         return view('auth.login');
-    }  
-    public function registration()
+    }
 
+    public function registration()
     {
         return view('auth.registration');
     }
+
     public function postLogin(Request $request)
     {
         $request->validate([
             'email' => 'required',
             'password' => 'required',
         ]);
+
         $credentials = $request->only('email', 'password');
         if (Auth::attempt($credentials)) {
             return redirect()->intended('admin/dashboard')
-                        ->withSuccess('You have Successfully loggedin');
+                ->withSuccess('You have Successfully logged in');
         }
-        return redirect("login")->withSuccess('Oppes! You have entered invalid credentials');
 
+        return redirect("login")->withSuccess('Oops! You have entered invalid credentials');
     }
+
     public function postRegistration(Request $request)
-    {  
+    {
         $request->validate([
             'name' => 'required',
             'email' => 'required|email|unique:users',
@@ -45,72 +63,39 @@ class AuthController extends Controller
 
         $data = $request->all();
         $this->create($data);
-        return redirect("admin/dashboard")->withSuccess('Great! You have Successfully loggedin');
 
+        return redirect("admin/dashboard")->withSuccess('Great! You have Successfully registered');
     }
+
     public function dashboard()
     {
-        if(Auth::check()){
-            $apiKey = env('SAMSARA_API_KEY');
-            $baseUrl = "https://api.samsara.com";
-    
-            $ch = curl_init();
-    
-            // Set the URL for the drivers endpoint
-            curl_setopt($ch, CURLOPT_URL, $baseUrl . "/fleet/drivers");
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-            // Set headers
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                "Authorization: Bearer $apiKey",
-                "Content-Type: application/json"
-            ]);
-    
-            // Execute the request
-            $response = curl_exec($ch);
-    
-            if (curl_errno($ch)) {
-                echo "Error: " . curl_error($ch);
-            } else {
-                // Decode JSON response
-                $drivers = json_decode($response, true);
-    
-                return view('dashboard',compact('drivers'));
+        if (Auth::check()) {
+            try {
+                $response = $this->client->get('/fleet/drivers');
+                $drivers = json_decode($response->getBody()->getContents(), true);
+
+                return view('dashboard', compact('drivers'));
+            } catch (\Exception $e) {
+                return back()->withErrors(['error' => 'Failed to fetch drivers: ' . $e->getMessage()]);
             }
         }
-        return redirect("login")->withSuccess('Opps! You do not have access');
 
+        return redirect("login")->withSuccess('Oops! You do not have access');
     }
-
-
-
 
     public function addresses()
     {
         if (Auth::check()) {
-            $apiKey = env('SAMSARA_API_KEY');
-            $baseUrl = "https://api.samsara.com/addresses";
-    
-            // Make API call
-            $response = Http::withHeaders([
-                'accept' => 'application/json',
-                'authorization' => "Bearer {$apiKey}",
-            ])->withoutVerifying()->get($baseUrl);
-            
-    
-            // Check for success
-            if ($response->successful()) {
-                $addresses = $response->json(); // Decode JSON response
+            try {
+                $response = $this->client->get('/addresses');
+                $addresses = json_decode($response->getBody()->getContents(), true);
+
                 return view('addresses', compact('addresses'));
-            } else {
-                // Log or handle errors
-                $error = $response->json();
-                return back()->withErrors(['error' => 'Failed to fetch addresses.']);
+            } catch (\Exception $e) {
+                return back()->withErrors(['error' => 'Failed to fetch addresses: ' . $e->getMessage()]);
             }
         }
-    
+
         return redirect("login")->with('error', 'Oops! You do not have access');
     }
 
@@ -119,12 +104,10 @@ class AuthController extends Controller
         return view('routeCreate');
     }
 
-
     public function addressesStore(Request $request)
     {
-       
         $validated = $request->validate([
-            'name' => 'required',
+            'name' => 'required|string',
             'addressTypes' => 'required|array',
             'contactIds' => 'required|array',
             'externalIds.maintenanceId' => 'required|string',
@@ -132,118 +115,99 @@ class AuthController extends Controller
             'formattedAddress' => 'required|string',
             'latitude' => 'required|numeric',
             'longitude' => 'required|numeric',
-            'name' => 'required|string',
             'notes' => 'nullable|string',
             'tagIds' => 'required|array',
+            'geofenceType' => 'string|in:circle,polygon',
         ]);
+
+        $validated['geofenceType'] = "circle";
 
         $payload = [
             'addressTypes' => $validated['addressTypes'],
             'contactIds' => $validated['contactIds'],
             'externalIds' => $validated['externalIds'],
             'formattedAddress' => $validated['formattedAddress'],
-            'geofence' => [
-                'circle' => [
-                    'latitude' => $validated['latitude'],
-                    'longitude' => $validated['longitude'],
-                    'radiusMeters' => 25,
-                ],
-                'polygon' => [
-                    'vertices' => [
-                        [
-                            'latitude' => $validated['latitude'],
-                            'longitude' => $validated['longitude'] + 0.0001,
-                        ],
-                        [
-                            'latitude' => $validated['latitude'] + 1.0,
-                            'longitude' => $validated['longitude'] + 0.0001,
-                        ],
-                        [
-                            'latitude' => $validated['latitude'],
-                            'longitude' => $validated['longitude'] - 1.0,
-                        ],
-                    ],
-                ],
-                'settings' => ['showAddresses' => true],
-            ],
+            'geofence' => ['settings' => ['showAddresses' => true]],
             'latitude' => $validated['latitude'],
             'longitude' => $validated['longitude'],
             'name' => $validated['name'],
             'notes' => $validated['notes'],
             'tagIds' => $validated['tagIds'],
         ];
-        $apiKey = env('SAMSARA_API_KEY');
 
-        $response = Http::withHeaders([
-            'accept' => 'application/json',
-            'authorization' => 'Bearer ' . env('SAMSARA_API_KEY'),
-            'content-type' => 'application/json',
-        ])
-        ->withoutVerifying()  // Disable SSL verification
-        ->post('https://api.samsara.com/addresses', $payload);
-        
+        if ($validated['geofenceType'] === 'circle') {
+            $payload['geofence']['circle'] = [
+                'latitude' => $validated['latitude'],
+                'longitude' => $validated['longitude'],
+                'radius' => 20,
+            ];
+        } elseif ($validated['geofenceType'] === 'polygon') {
+            $payload['geofence']['polygon'] = [
+                'vertices' => [
+                    [
+                        'latitude' => $validated['latitude'],
+                        'longitude' => $validated['longitude'] + 0.0001,
+                    ],
+                    [
+                        'latitude' => $validated['latitude'] + 1.0,
+                        'longitude' => $validated['longitude'] + 0.0001,
+                    ],
+                    [
+                        'latitude' => $validated['latitude'],
+                        'longitude' => $validated['longitude'] - 1.0,
+                    ],
+                ],
+            ];
+        }
 
-if ($response->failed()) {
-    return response()->json([
-        'message' => 'Failed to create address: ' . $response->body(),
-        'requestId' => $response->json('requestId')
-    ], 400);
-}
+        try {
+            $response = $this->client->post('/addresses', ['json' => $payload]);
 
-return $response->json();
+            if ($response->getStatusCode() !== 200) {
+                return response()->json([
+                    'message' => 'Failed to create address',
+                    'details' => json_decode($response->getBody(), true),
+                ], $response->getStatusCode());
+            }
 
+            return json_decode($response->getBody()->getContents(), true);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'An error occurred: ' . $e->getMessage(),
+            ], 400);
+        }
     }
 
     public function user()
     {
-        if(Auth::check()){
-            $apiKey = env('SAMSARA_API_KEY');
-            $baseUrl = "https://api.samsara.com";
-    
-            $ch = curl_init();
-    
-            // Set the URL for the drivers endpoint
-            curl_setopt($ch, CURLOPT_URL, $baseUrl . "/fleet/drivers");
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-            // Set headers
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                "Authorization: Bearer $apiKey",
-                "Content-Type: application/json"
-            ]);
-    
-            // Execute the request
-            $response = curl_exec($ch);
-    
-            if (curl_errno($ch)) {
-                echo "Error: " . curl_error($ch);
-            } else {
-                // Decode JSON response
-                $drivers = json_decode($response, true);
-    
-                return view('user',compact('drivers'));
+        if (Auth::check()) {
+            try {
+                $response = $this->client->get('/fleet/drivers');
+                $drivers = json_decode($response->getBody()->getContents(), true);
+
+                return view('user', compact('drivers'));
+            } catch (\Exception $e) {
+                return back()->withErrors(['error' => 'Failed to fetch drivers: ' . $e->getMessage()]);
             }
-            return view('user');
         }
-        return redirect("login")->withSuccess('Opps! You do not have access');
 
+        return redirect("login")->withSuccess('Oops! You do not have access');
     }
+
     public function create(array $data)
-
     {
-      return User::create([
-        'name' => $data['name'],
-        'email' => $data['email'],
-        'password' => Hash::make($data['password'])
-      ]);
+        return User::create([
+            'name' => $data['name'],
+            'email' => $data['email'],
+            'password' => Hash::make($data['password']),
+        ]);
     }
 
-    public function logout() {
+    public function logout()
+    {
         Session::flush();
         Auth::logout();
+
         return Redirect('/');
     }
-
 }
