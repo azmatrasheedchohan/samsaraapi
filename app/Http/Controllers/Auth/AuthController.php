@@ -139,7 +139,7 @@ class AuthController extends Controller
             $payload['geofence']['circle'] = [
                 'latitude' => $validated['latitude'],
                 'longitude' => $validated['longitude'],
-                'radius' => 20,
+                'radiusMeters' => 20,
             ];
         } elseif ($validated['geofenceType'] === 'polygon') {
             $payload['geofence']['polygon'] = [
